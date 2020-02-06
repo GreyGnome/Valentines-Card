@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# The project is designed to run at 8 MHz. 1 MHz is the default from the factory.
+# It will probably work, but has not been tested.
+# Before programming, I must set the 8 MHz fuses.
+# also, I set the brownout detector to 2.7V
+/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/bin/avrdude -C/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/etc/avrdude.conf -v -pm328p -cusbasp -Pusb -U lfuse:w:0xE2:m -U efuse:w:0xFD:m
