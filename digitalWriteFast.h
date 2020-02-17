@@ -3,14 +3,17 @@
 
 
 // Standard Arduino Pins
+// This gets rid of a warning during compile.
+#undef digitalPinToPortReg
 #define digitalPinToPortReg(P) \
-(((P) >= 0 && (P) <= 7) ? &PORTD : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &PORTB : &PORTC))
+(((P) <= 7) ? &PORTD : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &PORTB : &PORTC))
 #define digitalPinToDDRReg(P) \
-(((P) >= 0 && (P) <= 7) ? &DDRD : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &DDRB : &DDRC))
+(((P) <= 7) ? &DDRD : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &DDRB : &DDRC))
 #define digitalPinToPINReg(P) \
-(((P) >= 0 && (P) <= 7) ? &PIND : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &PINB : &PINC))
+(((P) <= 7) ? &PIND : ((((P) >= 8 && (P) <= 13) || (P) == 20 || (P) == 21) ? &PINB : &PINC))
+// Pin D22 is not included.
 #define digitalPinToBit(P) \
-(((P) >= 0 && (P) <= 7) ? (P) : (((P) >= 8 && (P) <= 13) ? (P) - 8 : (P) - 14))
+(((P) <= 7) ? (P) : (((P) >= 8 && (P) <= 13) ? (P) - 8 : (P) - 14))
 
 #if defined(__AVR_ATmega8__)
 
