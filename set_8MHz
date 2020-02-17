@@ -4,4 +4,4 @@
 # It will probably work, but has not been tested.
 # Before programming, I must set the 8 MHz fuses.
 # also, I set the brownout detector to 2.7V
-/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/bin/avrdude -C/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/etc/avrdude.conf -v -pm328p -cusbasp -Pusb -U lfuse:w:0xE2:m -U efuse:w:0xFD:m
+/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/bin/avrdude -C/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/etc/avrdude.conf -v -pm328p -cusbasp -Pusb -U lfuse:w:0xE2:m -U efuse:w:0xFE:m
