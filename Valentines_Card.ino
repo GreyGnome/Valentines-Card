@@ -91,7 +91,7 @@ static inline void isr_display_value(uint8_t value) {
 //const uint8_t led_pins[] = {0, 1, 2, 4, 16, 17, 18, 19};
 const uint8_t led_pins[] = {2, 3, 19};
 //const uint8_t led_pins[] = {18, 19}; //2, 4, 16, 17, 18, 19};
-volatile uint8_t led_brightness[] = {0x01, 0x01, 0x01, 0, 0, 0, 0, 0};
+volatile uint8_t led_brightness[] = {0xFF, 0x01, 0x01, 0, 0, 0, 0, 0};
 //volatile uint8_t led_brightness[] = {0, 0};
 
 volatile uint8_t current_led=0;
@@ -120,20 +120,11 @@ volatile uint8_t this_led_pin = led_pins[0];
  * - when this ISR is hit, the LED should go low (unless it's 0; then just stay 1).
  */
 ISR(TIMER2_OVF_vect) {
-  //digitalWriteFast(OC2A_PIN, HIGH);
-  //digitalWriteFast(OC2A_PIN, LOW);
-  //digitalWriteFast(OC2A_PIN, HIGH);
-  //digitalWriteFast(OC2B_PIN, LOW);
   current_led++;
   if (current_led == ARRAY_SIZE(led_pins)) current_led = 0;
   this_led_pin=led_pins[current_led];
-  brightness=led_brightness[current_led];
-  OCR2A=brightness;
   // compensate for the short-pulse problem with FastPWM when OCR2A==0; 
-  if (brightness != 0) { digitalWriteFast(this_led_pin, LED_ON); }
-  //else { digitalWriteFast(this_led, LED_ON); }
-  //ovf_vect=true;
-  interrupt_count++;
+  if (OCR2A != 0) { digitalWriteFast(this_led_pin, LED_ON); }
 }
 
 //ISR(timer2_ovf_vect) {
@@ -141,39 +132,19 @@ ISR(TIMER2_OVF_vect) {
 // At the end of its PWM period, the LED (-) pin should go LOW
 // to thus shut off the LED.
 // LED + goes to pin 11, OC2A. LED - goes to the individual LED pins.
+//
+// Note: Because the OC2A value is double buffered in FastPWM, we need to set it
+// before so the overflow ISR can retrieve the proper value.
 ISR(TIMER2_COMPA_vect) {
-  uint8_t next_led;
-  //digitalWriteFast(11, LOW);
   digitalWriteFast(this_led_pin, LED_OFF);
-  next_led=current_led+1;
-  if (next_led == ARRAY_SIZE(led_pins)) next_led = 0;
-  OCR2A = led_brightness[next_led]; // DOUBLE BUFFERED, SET ON BOTTOM!
-  interrupt_count--;
-  //compa_vect=true;
-  //digitalWriteFast(OC2A_PIN, HIGH);
-  //digitalWriteFast(OC2A_PIN, LOW);
-  //digitalWriteFast(OC2B_PIN, HIGH);
-  //digitalWriteFast(OC2B_PIN, LOW);
+  current_led++;
+  if (current_led == ARRAY_SIZE(led_pins)) current_led = 0;
+  OCR2A = led_brightness[current_led]; // DOUBLE BUFFERED, SET ON BOTTOM!
   //DEBUG_CLK(1);
   //DEBUG_CLK(1);
   //PORTD = 0xC0;
-  /*
   // NOOP ************************
   // __asm__ __volatile__ ("nop");
-
-  // do
-  digitalWriteFast(led_pin, LED_OFF); // reset old pin for multiplexing
-  led_pin = led_pins[current_led];
-  digitalWriteFast(led_pin, LED_OFF); // reset new pin for multiplexing
-
-  if (led_mux_sequence < 20) {
-    digitalWriteFast(led_pin, LED_ON); // Need logic here.
-  }
-  current_led++;
-  if (current_led == sizeof(led_pins)) {
-    current_led = 0;
-  }
-  led_mux_sequence++; */
 }
 
 void set_all_pins_input() {
@@ -266,7 +237,7 @@ void set_timer2_fastpwm(void) {
   //TIMSK2 |= (1 << OCIE2B); /* enable timer2 compare B interrupt */
   TIMSK2 |= (1 << OCIE2A); /* enable timer2 compare A interrupt */
   //TCCR2B |= (1 << CS21);   // x8 prescaler, f=3906 Hz (measured 258 uS, == 3875 Hz)
-  TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);   // x1024 prescaler, f=61 Hz
+  TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);   // x1024 prescaler, OVF f=61 Hz
 }
 
 // the setup function runs once when you press reset or power the board
