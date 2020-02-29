@@ -45,7 +45,6 @@
 #define OC2B_PIN  3
 
 /* DEBUGGING //////////////////////////////////////\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
-const uint8_t MY_EXT_CLK = 13;
 const uint8_t EXT_CLK_IN = 20; // Pin 20 NOT ON CRYSTAL ARDUINOS!!!
                                //Only if the internal oscillator is used as a clock
 const uint8_t INDICATOR = 15;
@@ -63,7 +62,11 @@ const uint8_t debug_rst = (uint8_t (~debug_hi)) & (uint8_t (~debug_lo));
 #define DEBUG_CLK(V) ((V) != 0) ? *(digitalPinToPortReg(DEBUG_X)) |= debug_hi : (*(digitalPinToPortReg(DEBUG_X)) |= debug_lo); *(digitalPinToPortReg(DEBUG_X)) &= debug_rst
 // Set the value of the debug X port, based on V. It is not reset.
 #define DEBUG_BIT(V) ((V) != 0) ? *(digitalPinToPortReg(DEBUG_X)) |= debug_hi : (*(digitalPinToPortReg(DEBUG_X)) |= debug_lo)
-
+// To use:
+/*digitalWriteFast(DEBUG_X, HIGH);
+__asm__ __volatile__ ("nop");
+__asm__ __volatile__ ("nop");
+digitalWriteFast(DEBUG_X, LOW);*/
 static inline void isr_display_value(uint8_t value) {
   uint8_t i;
   for (i=0b10000000; i > 0; i = i>>1) {
@@ -75,9 +78,9 @@ static inline void isr_display_value(uint8_t value) {
 
 /* LED VALUES /////////////////////////////////////\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
 // Requires pgm_read_byte() to get it out. Costs 1 extra cycle. Not worth it on slower CPUs.
-// const uint8_t PROGMEM segment_pins[] = {0, 13, 12, 11, 1, 4, 20, 10};
+// const uint8_t PROGMEM segment_pins[] = {0, 1, 2, 3, 4, 5, 6, 7};
 // 20 is TOSC1!!!
-// WHITE: 0, 1, 2 4
+// WHITE: 0, 1, 2, 3
 // RED:   16, 17, 18, 19
 #define WHITE_1 0
 #define WHITE_2 1
@@ -88,10 +91,15 @@ static inline void isr_display_value(uint8_t value) {
 #define RED_3 6
 #define RED_4 7
 // WHITE_1, WHITE_2, WHITE_3, WHITE_4, RED_1, RED_2, RED_3, RED_4};
-//const uint8_t led_pins[] = {0, 1, 2, 4, 16, 17, 18, 19};
-const uint8_t led_pins[] = {2, 3, 19};
+const uint8_t led_pins[] = {0, 1, 2, 3, 16, 17, 18, 19};
+//const uint8_t led_pins[] = {0, 1, 19};
 //const uint8_t led_pins[] = {18, 19}; //2, 4, 16, 17, 18, 19};
-volatile uint8_t led_brightness[] = {0xFF, 0x01, 0x01, 0, 0, 0, 0, 0};
+//Why is an FF at any position, replicated at the next position?
+//Not only FF, but FD, FE, FF. FC seems safe to use. This is odd behavior.
+//It must have to do with the double-buffered nature of the OCR2A. It takes a
+//couple of cycles before it will actually take effect, which isn't good enough
+//for me.
+volatile uint8_t led_brightness[] = {0xFC, 0xFC, 0xFC, 0xFC, 0x08, 0x08, 0x08, 0x08};
 //volatile uint8_t led_brightness[] = {0, 0};
 
 volatile uint8_t current_led=0;
@@ -99,6 +107,11 @@ volatile uint8_t brightness=0;
 // On is LOW...
 #define LED_ON 0
 #define LED_OFF 1
+
+volatile uint8_t my_millis=0;
+ISR(TIMER0_COMPB_vect) {
+  my_millis++;
+}
 
 ISR(TIMER2_COMPB_vect) {
   //digitalWriteFast(OC2A_PIN, HIGH);
@@ -109,7 +122,6 @@ ISR(TIMER2_COMPB_vect) {
   //DEBUG_CLK(1);
 }
 
-volatile uint8_t interrupt_count=0;
 volatile boolean ovf_vect=false;
 volatile boolean compa_vect=false;
 volatile uint8_t this_led_pin = led_pins[0];
@@ -120,8 +132,6 @@ volatile uint8_t this_led_pin = led_pins[0];
  * - when this ISR is hit, the LED should go low (unless it's 0; then just stay 1).
  */
 ISR(TIMER2_OVF_vect) {
-  current_led++;
-  if (current_led == ARRAY_SIZE(led_pins)) current_led = 0;
   this_led_pin=led_pins[current_led];
   // compensate for the short-pulse problem with FastPWM when OCR2A==0; 
   if (OCR2A != 0) { digitalWriteFast(this_led_pin, LED_ON); }
@@ -132,18 +142,18 @@ ISR(TIMER2_OVF_vect) {
 // At the end of its PWM period, the LED (-) pin should go LOW
 // to thus shut off the LED.
 // LED + goes to pin 11, OC2A. LED - goes to the individual LED pins.
-//
-// Note: Because the OC2A value is double buffered in FastPWM, we need to set it
-// before so the overflow ISR can retrieve the proper value.
 ISR(TIMER2_COMPA_vect) {
+  uint8_t bright;
+
   digitalWriteFast(this_led_pin, LED_OFF);
   current_led++;
   if (current_led == ARRAY_SIZE(led_pins)) current_led = 0;
-  OCR2A = led_brightness[current_led]; // DOUBLE BUFFERED, SET ON BOTTOM!
-  //DEBUG_CLK(1);
-  //DEBUG_CLK(1);
-  //PORTD = 0xC0;
-  // NOOP ************************
+  bright = led_brightness[current_led];
+  // See https://forum.arduino.cc/index.php?topic=665510.0 .
+  // Because of double-buffered OCR2A, setting this is a bit problematic.
+  if (bright > 0xFC) bright = 0xFC;
+  OCR2A = bright; // DOUBLE BUFFERED, SET ON BOTTOM!
+  // NOOP ************************ (for reference)
   // __asm__ __volatile__ ("nop");
 }
 
@@ -153,20 +163,48 @@ void set_all_pins_input() {
   }
 }
 
+inline void indicate_flash(uint8_t counter) {
+  uint8_t indicator=INDICATOR;
+
+  pinMode(indicator, OUTPUT);
+  if (counter == 0) {
+    counter=10;
+    for (uint8_t j=0; j < counter; j++) {
+      digitalWriteFast(indicator, LED_ON); // on
+      _delay_ms (75);
+      digitalWriteFast(indicator, LED_OFF); // off
+      _delay_ms (75);
+    }
+  } else {
+    for (uint8_t j=0; j < counter; j++) {
+      digitalWriteFast(indicator, LED_ON); // on
+      _delay_ms (200);
+      digitalWriteFast(indicator, LED_OFF); // off
+      _delay_ms (200);
+    }
+  }
+}
+
 // Flash a few times (value) at the indicator pin.
 void indicate (uint8_t value) {
   // debugging
-  uint8_t indicator=16;
-
-  if (value==0) value=10;
-  pinMode(indicator, OUTPUT);
-  for (uint8_t j=0; j < value; j ++) {
-    digitalWriteFast(indicator, LED_ON); // on
-    delay (200);
-    digitalWriteFast(indicator, LED_OFF); // off
-    delay (200);
+  uint8_t local_value=value;
+  uint8_t to_display;
+  
+  if (value < 10) {
+    indicate_flash(value);
+    return;
   }
-  delay(500);
+  to_display=local_value / 100;
+  local_value=local_value - (to_display * 100);
+  indicate_flash(to_display);
+  _delay_ms (500);
+  to_display=local_value / 10;
+  local_value=local_value - (to_display * 10);
+  indicate_flash(to_display);
+  _delay_ms (500);
+  indicate_flash(local_value);
+  _delay_ms (500);
   //
 }
 
@@ -175,14 +213,12 @@ void set_pin_directions(void) {
   for (i=0; i < ARRAY_SIZE(led_pins); i++) {
     pinMode(led_pins[i], OUTPUT);
   }
-  pinMode(DEBUG_X, OUTPUT);
-  pinMode(DEBUG_CLK, OUTPUT);
+  // pinMode(INDICATOR, OUTPUT); // Debugging
+  // pinMode(DEBUG_X, OUTPUT);   // Debugging
+  // pinMode(DEBUG_CLK, OUTPUT); // Debugging
   pinMode(OC2A_PIN, OUTPUT);
   //pinMode(OC2B_PIN, OUTPUT);
-  pinMode(EXT_CLK_IN, INPUT);  // TOSC1 for external clock
-  pinMode(MY_EXT_CLK, OUTPUT); // External clock source
-  pinMode(13, OUTPUT);
-  pinMode(8, OUTPUT);
+  //pinMode(EXT_CLK_IN, INPUT);  // TOSC1 for external clock
 }
 
 void set_timer2_ctc(void) {
@@ -190,7 +226,7 @@ void set_timer2_ctc(void) {
   TCCR2A = 0;
   TCCR2B = 0;
   // 0x7B == *approximately* 1024 times per second at 8MHz clock
-  OCR2A = 0x17;  // 8 MHz clock: f = 8,000,000 / (2 * prescalar * (1 + OCR2)
+  OCR2A = 0xFF;  // 8 MHz clock: f = 8,000,000 / (2 * prescalar * (1 + OCR2)
   //OCR2B = 0xF1;
   //  One could set bits this way:
   //  sbi(TCCR2A, WGM20);
@@ -206,7 +242,6 @@ void set_timer2_ctc(void) {
   TIMSK2 |= (1 << TOIE2); // enable timer2 overflow interrupt- not reached if OCIE2A enabled
   //TIMSK2 |= (1 << OCIE2B); /* enable timer2 compare B interrupt */
   TIMSK2 |= (1 << OCIE2A); /* enable timer2 compare A interrupt */
-  TCCR2B |= (1 << CS22);   // x64 prescaler 
 }
 
 void set_timer2_fastpwm(void) {
@@ -214,12 +249,12 @@ void set_timer2_fastpwm(void) {
   // Set up timer 2
   // 8 MHz clock: f = 8,000,000 / (prescalar * 256)
   TCCR2A = 0;
-  TCCR2B = 0;
+  TCCR2B = 0; // Shut off clock entirely (CS2{2,1,0} == 000)
   // 0x7B == *approximately* 1024 times per second at 8MHz clock
   //OCR2A = 0x17;  // 8 MHz clock: f = 8,000,000 / (prescalar * 256)
-  OCR2A = 0xFF;    // start at max.
+  OCR2A = led_brightness[0];    //
   //OCR2B = 0xF1;
-  //  One could set bits this way:
+  //  One could set bits this way: // if wiring_private.h is included.
   //  sbi(TCCR2A, WGM20);
   //  Or clear them this way:
   //  cbi(TCCR2A, COM2A0);
@@ -236,37 +271,91 @@ void set_timer2_fastpwm(void) {
   TIMSK2 |= (1 << TOIE2); // enable timer2 overflow interrupt.
   //TIMSK2 |= (1 << OCIE2B); /* enable timer2 compare B interrupt */
   TIMSK2 |= (1 << OCIE2A); /* enable timer2 compare A interrupt */
+  TCNT2=0;
+  //ASSR |= (1 << EXCLK);    // external clock
+  //ASSR |= (1 << AS2);
+}
+inline void turn_on_clock() {
+  //TCCR2B |= (1 << CS20);   // x1 prescaler
+  TCCR2B |= (1 << CS22);   // x64 prescaler 
   //TCCR2B |= (1 << CS21);   // x8 prescaler, f=3906 Hz (measured 258 uS, == 3875 Hz)
-  TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);   // x1024 prescaler, OVF f=61 Hz
+  //TCCR2B |= (1 << CS22) | (1 << CS21) | (1 << CS20);   // x1024 prescaler, f=61 Hz
 }
 
 // the setup function runs once when you press reset or power the board
 void setup() {
   //delay(100);
   uint8_t i=0;
+  set_timer2_fastpwm();
   sei();
   set_pin_directions();
-  Serial.begin(9600);
+  //Serial.begin(230400);
   for (i=0; i < ARRAY_SIZE(led_pins); i++) {
     digitalWriteFast(led_pins[i], LED_OFF);
   }
   digitalWriteFast(OC2A_PIN, HIGH);
   for (i=0; i < ARRAY_SIZE(led_pins); i++) {
-    digitalWriteFast(13, HIGH);
-    digitalWriteFast(8, HIGH);
-    digitalWriteFast(led_pins[i], LED_OFF);
+    digitalWriteFast(11, HIGH);
     digitalWriteFast(led_pins[i], LED_ON);
-    delay(500);
+    _delay_ms(200);
     digitalWriteFast(led_pins[i], LED_OFF);
   }
   digitalWriteFast(OC2A_PIN, LOW);
-  digitalWriteFast(13, LOW);
-  digitalWriteFast(8, LOW);
   //TIFR2 |= (1 << TOV2);    /* clear interrupt flag */
   // 800000000000000000000000000000000000000000000000000000000000000000000000000000
-  set_timer2_fastpwm();
   ADCSRA &= ~(1<<ADEN); // Disable ADC for better power consumption (ATmega8)
                         // Might need PRR |= (1 << PRADC) 
+  // indicate(2); Sanity check. Make sure: set INDICATOR to output in set_pin_directions
+  // Start out sanely
+  digitalWriteFast(OC2A_PIN, HIGH);
+  turn_on_clock();
+  // Utilize the timer0, which is already running for millis().
+  OCR0B=0x00;  // 0xFF is constant high. 0x00 shows a single pulse.
+               // This takes place every 1 ms as measured on a scope, so using
+               // the compare interrupt as ms timer is good.
+  TIMSK0 |= (1 << OCIE0B);
+}
+
+
+const uint8_t ALL = 0xFF;
+void off(uint8_t led) {
+  if (led == ALL) {
+    for (uint8_t i=0; i < ARRAY_SIZE(led_pins); i++) {
+      led_brightness[i] = 0;
+    }
+    return;
+  }
+  led_brightness[led] = 0;
+}
+
+void on(uint8_t led, uint8_t level) {
+  if (led == ALL) {
+    for (uint8_t i=0; i < ARRAY_SIZE(led_pins); i++) {
+      led_brightness[i] = level;
+    }
+    return;
+  }
+  led_brightness[led] = level;
+}
+
+const uint8_t UP=1;
+const uint8_t DOWN=0;
+uint8_t light_level = 0;
+uint8_t direction = UP;
+void twinkle(uint8_t led, uint8_t level) {
+  uint8_t light_level_difference = 0;
+
+  if (light_level < 50) light_level_difference = 5;
+  else if (light_level < 80) light_level_difference = 10;
+  else light_level_difference = 20;
+  if (direction == UP)
+    light_level += light_level_difference;
+  else
+    light_level -= light_level_difference;
+
+  led_brightness[led] = light_level;
+  if ((light_level >= level) || (light_level > 234)) direction=DOWN;
+  if (light_level < 6) direction=UP;
 }
 
 uint32_t last_ms = 0;
@@ -274,99 +363,24 @@ uint8_t last_cnt = 0;
 boolean loop_first_half = true;
 // the loop function runs forever
 void loop() {
-  uint32_t current_ms = millis();
-  uint32_t delta_ms = current_ms - last_ms;
-  /*
-  digitalWriteFast(0, LED_ON);
-  digitalWriteFast(1, LED_ON);
-  delay(1000);
-  digitalWriteFast(0, LED_OFF);
-  digitalWriteFast(1, LED_OFF);
-  delay(1000);
-  return;
-  */
-  //uint8_t test_brightness=0x00;
-  //digitalWriteFast(MY_EXT_CLK, LOW);
-  if (ovf_vect) {
-    //Serial.print("O");
-    ovf_vect = false;
+  uint16_t ms_counter;
+  uint8_t current_millis;
+
+  off(ALL);
+  _delay_ms(500);
+  on(ALL, 0xFF);
+  _delay_ms(500);
+  off(ALL);
+
+  // twinkle it
+  ms_counter = 0;
+  current_millis=my_millis;
+  light_level = 0;
+  direction = UP;
+  while(ms_counter < 200) {
+    _delay_ms(50);
+    ms_counter++;
+    twinkle(WHITE_2, 0xFF);
   }
-  /*
-    Serial.print("--O ");
-    Serial.print("Cnt x");
-    Serial.print(TCNT2, HEX);
-    Serial.print(" OCR2A x");
-    Serial.print(OCR2A, HEX);
-    Serial.print(" LED ");
-    Serial.print(current_led, HEX);
-    Serial.print(" pin ");
-    Serial.println(led_pins[current_led], DEC);
-    last_cnt = TCNT2;
-    ovf_vect = false;
-  }
-  */
-  if (compa_vect) {
-    //Serial.println("");
-    compa_vect = false;
-  }
-  /*
-    Serial.print(" a ");
-    Serial.print("Cnt x");
-    Serial.print(TCNT2, HEX);
-    Serial.print(" OCR2A x");
-    Serial.print(OCR2A, HEX);
-    Serial.print(" LED ");
-    Serial.print(current_led, HEX);
-    Serial.print(" pin ");
-    Serial.println(led_pins[current_led], DEC);
-    last_cnt = TCNT2;
-    compa_vect = false;
-  }
-  */
-    /*
-    Serial.println("xxxxxxxxxxxxxxxxxxxxxxxxxxx");
-    if (loop_first_half) {
-      led_brightness[0]=0xFF;
-      led_brightness[1]=0xFF;
-      led_brightness[2]=0xFF;
-      loop_first_half = false;
-    }
-    */
-  /*
-  led_brightness[WHITE_1]=0xFF;
-  led_brightness[WHITE_2]=0xFF;
-  led_brightness[WHITE_3]=0xFF;
-  led_brightness[WHITE_4]=0xFF;
-  led_brightness[RED_1]=0xFF;
-  led_brightness[RED_2]=0xFF;
-  led_brightness[RED_3]=0xFF;
-  led_brightness[RED_4]=0xFF;
-  */
-  //for (uint8_t i=0; i < ARRAY_SIZE(led_pins); i++) {
-    //led_brightness[i]=test_brightness;
-  //}
-  //digitalWriteFast(MY_EXT_CLK, HIGH);
-  /*
-    else {
-      led_brightness[0]=0xFF; // flashes!
-      led_brightness[1]=0xFF;
-      led_brightness[2]=0xFF;
-      loop_first_half = true;
-    }
-    last_ms = current_ms;
-  */
-  /*
-  if (delta_ms > 1) {
-    if (last_cnt != TCNT2) {
-      Serial.print("C ");
-      Serial.print(TCNT2, DEC);
-      Serial.print(" 2 ");
-      Serial.print(OCR2A, DEC);
-      Serial.print(" L ");
-      Serial.println(current_led, DEC);
-      last_cnt = TCNT2;
-    }
-  }
-  */
-  delay(10);
 }
+
